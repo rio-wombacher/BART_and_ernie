@@ -1,5 +1,4 @@
-Data Generation process
-
+Data Generation process for our models
 
 ```{r}
 set.seed(2020)
@@ -47,7 +46,7 @@ pi_nonlinear <- 0.8 * phi(3 * mu_nonlinear / s_nonlinear - 0.5 * x1) + 0.05 + ui
 ```
 
 ```{r}
-#Now lets get our outcomes according to this formula: Y = mu + tau * Z + rnorm(n)
+#Simulate Treatment assignments
 Z_linear <- rbinom(n, 1, pi_linear)
 Z_nonlinear <- rbinom(n, 1, pi_nonlinear)
 
@@ -56,6 +55,7 @@ epsilon <- rnorm(n)
 ```
 
 ```{r}
+#Now lets get our outcomes according to this formula: Y = mu + tau * Z + rnorm(n)
 #Create the 4 datasets
 #Linear and homogenous
 Y_lin_hom <- mu_linear + tau_homogeneous * Z_linear + epsilon
@@ -79,6 +79,7 @@ data_nonlin_het <- data.frame(Y = Y_nonlin_het, Z = Z_nonlinear, x1, x2, x3, x4,
 ```
 
 ```{r}
+#Check those dataframes out
 print(data_lin_hom)
 print(data_lin_het)
 print(data_nonlin_hom)
