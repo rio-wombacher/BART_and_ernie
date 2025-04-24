@@ -1,0 +1,87 @@
+Data Generation process
+
+
+```{r}
+set.seed(2020)
+
+n <- 250  # sample size
+
+x1 <- rnorm(n)
+x2 <- rnorm(n)
+x3 <- rnorm(n)
+x4 <- rbinom(n, 1, 0.5)
+x5 <- sample(1:3, n, replace = TRUE)
+```
+
+```{r}
+#g function like they describe
+g_func <- function(x) {
+  return(ifelse(x == 1, 2, ifelse(x == 2, -1, -4)))
+}
+```
+
+```{r}
+#Get mu
+mu_linear <- 1 + g_func(x5) + x1 * x3
+mu_nonlinear <- -6 + g_func(x5) + 6 * abs(x3 - 1)
+```
+
+```{r}
+#Get tau
+tau_homogeneous <- rep(3, n)
+tau_heterogeneous <- 1 + 2 * x2 * x5
+```
+
+```{r}
+#Get the propensity score
+ui <- runif(n)
+s_linear <- sd(mu_linear)
+s_nonlinear <- sd(mu_nonlinear)
+
+# Standard normal CDF
+phi <- pnorm
+
+# Propensity scores
+pi_linear <- 0.8 * phi(3 * mu_linear / s_linear - 0.5 * x1) + 0.05 + ui / 10
+pi_nonlinear <- 0.8 * phi(3 * mu_nonlinear / s_nonlinear - 0.5 * x1) + 0.05 + ui / 10
+```
+
+```{r}
+#Now lets get our outcomes according to this formula: Y = mu + tau * Z + rnorm(n)
+Z_linear <- rbinom(n, 1, pi_linear)
+Z_nonlinear <- rbinom(n, 1, pi_nonlinear)
+
+# error term
+epsilon <- rnorm(n)
+```
+
+```{r}
+#Create the 4 datasets
+#Linear and homogenous
+Y_lin_hom <- mu_linear + tau_homogeneous * Z_linear + epsilon
+
+#Linear heterogeneous
+Y_lin_het <- mu_linear + tau_heterogeneous * Z_linear + epsilon
+
+#Non-linear homogeneous
+Y_nonlin_hom <- mu_nonlinear + tau_homogeneous * Z_nonlinear + epsilon
+
+#Non-linear heterogeneous
+Y_nonlin_het <- mu_nonlinear + tau_heterogeneous * Z_nonlinear + epsilon
+```
+
+```{r}
+#Throw these bad boys into a dataframes
+data_lin_hom <- data.frame(Y = Y_lin_hom, Z = Z_linear, x1, x2, x3, x4, x5)
+data_lin_het <- data.frame(Y = Y_lin_het, Z = Z_linear, x1, x2, x3, x4, x5)
+data_nonlin_hom <- data.frame(Y = Y_nonlin_hom, Z = Z_nonlinear, x1, x2, x3, x4, x5)
+data_nonlin_het <- data.frame(Y = Y_nonlin_het, Z = Z_nonlinear, x1, x2, x3, x4, x5)
+```
+
+```{r}
+print(data_lin_hom)
+print(data_lin_het)
+print(data_nonlin_hom)
+print(data_nonlin_het)
+```
+
