@@ -21,8 +21,8 @@ g_func <- function(x) {
 
 ```{r}
 #Get mu
-mu_linear <- 1 + g_func(x5) + x1 * x3
-mu_nonlinear <- -6 + g_func(x5) + 6 * abs(x3 - 1)
+mu_linear <- 1 + g_func(x4) + x1 * x3
+mu_nonlinear <- -6 + g_func(x4) + 6 * abs(x3 - 1)
 ```
 
 ```{r}
@@ -86,3 +86,152 @@ print(data_nonlin_hom)
 print(data_nonlin_het)
 ```
 
+
+```{r}
+library(bcf)
+library(dplyr)
+
+set.seed(2020)
+
+# Setup
+n <- 250
+simulations <- 50
+X <- data.frame(x1, x2, x3, x4, x5)
+X_mat <- as.matrix(X)
+Z <- Z_linear
+pihat <- pi_linear
+
+# Define all 4 DGP combinations
+dgp_configs <- list(
+  list(mu = mu_linear, tau = tau_homogeneous, label = "linear_mu_homog_tau"),
+  list(mu = mu_linear, tau = tau_heterogeneous, label = "linear_mu_heterog_tau"),
+  list(mu = mu_nonlinear, tau = tau_homogeneous, label = "nonlinear_mu_homog_tau"),
+  list(mu = mu_nonlinear, tau = tau_heterogeneous, label = "nonlinear_mu_heterog_tau")
+)
+
+# Storage for all results
+all_results <- data.frame()
+
+# Loop through each DGP setup
+for (config in dgp_configs) {
+  mu <- config$mu
+  tau <- config$tau
+  label <- config$label
+
+  true_ATE <- mean(tau)
+  true_CATE <- tau
+
+  rmse_results <- data.frame(
+    ATE_RMSE = numeric(simulations),
+    CATE_RMSE = numeric(simulations)
+  )
+
+  for (i in 1:simulations) {
+    epsilon <- rnorm(n)
+    Y <- mu + tau * Z + epsilon
+
+    fit <- bcf(y = Y, z = Z, x_control = X_mat, x_moderate = X_mat, pihat = pihat)
+    tau_hat <- rowMeans(fit$tau)
+
+    rmse_results$ATE_RMSE[i] <- sqrt((mean(tau_hat) - true_ATE)^2)
+    rmse_results$CATE_RMSE[i] <- sqrt(mean((tau_hat - true_CATE)^2))
+  }
+
+  summary_rmse <- rmse_results %>%
+    summarise(
+      ATE_RMSE = mean(ATE_RMSE),
+      CATE_RMSE = mean(CATE_RMSE)
+    ) %>%
+    mutate(DGP = label)
+
+  all_results <- bind_rows(all_results, summary_rmse)
+}
+
+# Show all results
+print(all_results)
+```
+
+```{r}
+library(bartCause)
+
+
+set.seed(2020)
+
+# List of datasets
+data_list <- list(
+  lin_hom = data_lin_hom,
+  lin_het = data_lin_het,
+  nonlin_hom = data_nonlin_hom,
+  nonlin_het = data_nonlin_het
+)
+
+# True CATEs for each dataset
+true_tau_list <- list(
+  lin_hom = tau_homogeneous,
+  lin_het = tau_heterogeneous,
+  nonlin_hom = tau_homogeneous,
+  nonlin_het = tau_heterogeneous
+)
+
+results <- data.frame(
+  dataset = character(),
+  ATE_RMSE = numeric(),
+  CATE_RMSE = numeric()
+)
+
+for (data_name in names(data_list)) {
+  data <- data_list[[data_name]]
+  true_tau <- true_tau_list[[data_name]]
+  true_ATE <- mean(true_tau)
+  n <- nrow(data)
+  X <- data[, c("x1", "x2", "x3", "x4", "x5")]
+  Z <- data$Z
+  mu <- data$Y - true_tau * Z  # to regenerate Y with noise later
+
+  # Storage
+  ate_rmse <- numeric(50)
+  cate_rmse <- numeric(50)
+
+  for (i in 1:50) {
+    epsilon <- rnorm(n)
+    Y_sim <- mu + true_tau * Z + epsilon
+
+    # Estimate propensity scores
+    ps_model <- glm(Z ~ ., data = cbind(Z, X), family = binomial)
+    pihat <- predict(ps_model, type = "response")
+
+    # Fit BART using bartCause
+    bart_fit <- bartc(
+      response = Y_sim,
+      treatment = Z,
+      confounders = X,
+      method.rsp = "bart",
+      method.trt = "bart",  
+      estimand = "ate",
+      commonSup.rule = "none",
+      p.score = pihat,
+      p.scoreAsCovariate = TRUE
+    )
+
+    cate_hat <- fitted(bart_fit, type = "cate")
+    ate_hat <- mean(cate_hat)
+
+    # Store RMSEs
+    ate_rmse[i] <- sqrt((ate_hat - true_ATE)^2)
+    cate_rmse[i] <- sqrt(mean((cate_hat - true_tau)^2))
+  }
+
+  # Save results
+  results <- rbind(results, data.frame(
+    dataset = data_name,
+    ATE_RMSE = mean(ate_rmse),
+    CATE_RMSE = mean(cate_rmse)
+  ))
+}
+
+print(results)
+```
+
+
+
+ 
