@@ -138,7 +138,7 @@ for (config in dgp_configs) {
 
     # Fit BCF model with the correct propensity scores for this DGP
     fit <- bcf(y = Y, z = Z, x_control = X_mat, x_moderate = X_mat, pihat = pihat,
-              nburn = 1000, nsim = 2000)
+              nburn = 1000, nsim = 1000)
     
     # Extract posterior mean of treatment effects
     tau_hat <- rowMeans(fit$tau)
@@ -162,11 +162,93 @@ for (config in dgp_configs) {
 # Show all results
 print(all_results)
 ```
+**Only for Oscar**
+```{r}
+library(bcf)
+library(dplyr)
+library(parallel)
+library(withr)
+library(pbmcapply)
+
+set.seed(2020)
+
+# Setup
+n <- 250
+simulations <- 1
+X <- data.frame(x1, x2, x3, x4, x5)
+X_mat <- as.matrix(X)
+
+num_cores <- 15
+
+# Define all 4 DGP configurations
+dgp_configs <- list(
+  list(mu = mu_linear, tau = tau_homogeneous, Z = Z_linear, pihat = pi_linear, label = "linear_mu_homog_tau"),
+  list(mu = mu_linear, tau = tau_heterogeneous, Z = Z_linear, pihat = pi_linear, label = "linear_mu_heterog_tau"),
+  list(mu = mu_nonlinear, tau = tau_homogeneous, Z = Z_nonlinear, pihat = pi_nonlinear, label = "nonlinear_mu_homog_tau"),
+  list(mu = mu_nonlinear, tau = tau_heterogeneous, Z = Z_nonlinear, pihat = pi_nonlinear, label = "nonlinear_mu_heterog_tau")
+)
+
+# Create list of tasks
+tasks <- list()
+for (config in dgp_configs) {
+  for (sim in 1:simulations) {
+    tasks[[length(tasks) + 1]] <- list(
+      mu = config$mu,
+      tau = config$tau,
+      Z = config$Z,
+      pihat = config$pihat,
+      label = config$label,
+      sim = sim
+    )
+  }
+}
+
+# Define simulation function
+run_simulation <- function(task) {
+  mu <- task$mu
+  tau <- task$tau
+  Z <- task$Z
+  pihat <- task$pihat
+  label <- task$label
+  sim <- task$sim
+
+  epsilon <- rnorm(n)
+  Y <- mu + tau * Z + epsilon
+
+  temp_dir <- tempfile(pattern = paste0("bcf_", label, "_", sim, "_"))
+  dir.create(temp_dir)
+  withr::local_tempdir(tmpdir = temp_dir)
+
+  fit <- bcf(y = Y, z = Z, x_control = X_mat, x_moderate = X_mat, pihat = pihat,
+             nburn = 1000, nsim = 2000)
+
+  tau_hat <- rowMeans(fit$tau)
+  true_ATE <- mean(tau)
+  true_CATE <- tau
+
+  ATE_RMSE <- sqrt((mean(tau_hat) - true_ATE)^2)
+  CATE_RMSE <- sqrt(mean((tau_hat - true_CATE)^2))
+
+  return(data.frame(ATE_RMSE = ATE_RMSE, CATE_RMSE = CATE_RMSE, DGP = label))
+}
+
+# ✅ Correct parallel loop with progress bar
+results <- pbmclapply(tasks, run_simulation, mc.cores = num_cores)
+
+# Summarize
+all_results <- bind_rows(results) %>%
+  group_by(DGP) %>%
+  summarise(
+    ATE_RMSE = mean(ATE_RMSE),
+    CATE_RMSE = mean(CATE_RMSE),
+    .groups = "drop"
+  )
+
+print(all_results)
+```
 
 ```{r}
-install.packages('bartCause')
-library(bartCause)
-
+library(dbarts)
 
 set.seed(2020)
 
@@ -209,24 +291,30 @@ for (data_name in names(data_list)) {
     epsilon <- rnorm(n)
     Y_sim <- mu + true_tau * Z + epsilon
 
-    # Estimate propensity scores
-    ps_model <- glm(Z ~ ., data = cbind(Z, X), family = binomial)
-    pihat <- predict(ps_model, type = "response")
+    # Fit BART separately for Z=1 and Z=0
+    X_treated <- X[Z == 1, ]
+    Y_treated <- Y_sim[Z == 1]
+    X_control <- X[Z == 0, ]
+    Y_control <- Y_sim[Z == 0]
 
-    # Fit BART using bartCause
-    bart_fit <- bartc(
-      response = Y_sim,
-      treatment = Z,
-      confounders = X,
-      method.rsp = "bart",
-      method.trt = "bart",  
-      estimand = "ate",
-      commonSup.rule = "none",
-      p.score = pihat,
-      p.scoreAsCovariate = TRUE
+    bart_fit_treat <- dbarts::bart(
+      x.train = as.matrix(X_treated),
+      y.train = Y_treated,
+      x.test = as.matrix(X),
+      verbose = FALSE
     )
 
-    cate_hat <- fitted(bart_fit, type = "cate")
+    bart_fit_control <- dbarts::bart(
+      x.train = as.matrix(X_control),
+      y.train = Y_control,
+      x.test = as.matrix(X),
+      verbose = FALSE
+    )
+
+    mu1_hat <- colMeans(bart_fit_treat$yhat.test)
+    mu0_hat <- colMeans(bart_fit_control$yhat.test)
+
+    cate_hat <- mu1_hat - mu0_hat
     ate_hat <- mean(cate_hat)
 
     # Store RMSEs
@@ -243,6 +331,121 @@ for (data_name in names(data_list)) {
 }
 
 print(results)
+```
+
+```{r}
+library(glmnet)
+
+set.seed(2020)
+simulations <- 50
+
+# --- assume you've already defined data_list and true_tau_list ---
+lasso_results <- data.frame(
+  dataset         = character(),
+  ATE_RMSE        = numeric(),
+  ATE_COVERAGE    = numeric(),
+  ATE_CI_LENGTH   = numeric(),
+  CATE_RMSE       = numeric(),
+  CATE_COVERAGE   = numeric(),
+  CATE_CI_LENGTH  = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for(data_name in names(data_list)) {
+  data      <- data_list[[data_name]]
+  true_tau  <- true_tau_list[[data_name]]
+  true_ATE  <- mean(true_tau)
+  n         <- nrow(data)
+
+  # covariates + interactions
+  X_conf <- model.matrix(~ x1 + x2 + x3 + x4 + x5, data)[,-1]
+  Z_vec  <- data$Z
+  X_int  <- X_conf * Z_vec
+  colnames(X_int) <- paste0("Z.", colnames(X_conf))
+
+  # design for glmnet
+  D_mat <- cbind(Z = Z_vec, X_conf, X_int)
+  pf    <- c(0, rep(1, ncol(X_conf) + ncol(X_int)))  # no penalty on Z
+
+  # per‐simulation storage
+  ate_hat    <- numeric(simulations)
+  cate_rmse  <- numeric(simulations)
+  ate_cov    <- logical(simulations)
+  ate_len    <- numeric(simulations)
+  cate_cov_m <- matrix(FALSE, nrow=simulations, ncol=n)
+  cate_len_m <- matrix(0,     nrow=simulations, ncol=n)
+
+  for(i in seq_len(simulations)) {
+    # 1) re‐simulate outcome
+    mu_vec <- data$Y - true_tau * Z_vec
+    Y_sim  <- mu_vec + true_tau * Z_vec + rnorm(n)
+
+    # 2) fit CV‐Lasso + final Lasso
+    cvm <- cv.glmnet(D_mat, Y_sim, alpha = 1,
+                     penalty.factor = pf, nfolds = 5)
+    λmin <- cvm$lambda.min
+    fit  <- glmnet(D_mat, Y_sim, alpha = 1,
+                   lambda = λmin, penalty.factor = pf)
+
+    # 3) post‐Lasso OLS on selected
+    sel <- rownames(coef(fit))[coef(fit)[,1] != 0]
+    sel <- setdiff(sel, "(Intercept)")
+    if(!"Z" %in% sel) sel <- c("Z", sel)
+    df_ols <- data.frame(Y = Y_sim, D_mat[, sel, drop=FALSE])
+    form   <- as.formula(paste("Y ~", paste(names(df_ols)[-1], collapse = " + ")))
+    ols    <- lm(form, data = df_ols)
+
+    # 4) Extract ATE estimate and its SE from summary()
+    sm    <- summary(ols)$coefficients
+    est_z <- sm["Z", "Estimate"]
+    se_z  <- sm["Z", "Std. Error"]
+    zval  <- qnorm(0.975)
+    lo_z  <- est_z - zval * se_z
+    hi_z  <- est_z + zval * se_z
+
+    ate_hat[i] <- est_z
+    ate_cov[i] <- (lo_z <= true_ATE && true_ATE <= hi_z)
+    ate_len[i] <- hi_z - lo_z
+
+    # 5) form L matrix for each τ_i
+    V    <- vcov(ols)
+    coefs_nm <- names(coef(ols))
+    p    <- length(coefs_nm)
+    L    <- matrix(0, nrow=n, ncol=p, dimnames=list(NULL, coefs_nm))
+    L[ , "Z"] <- 1
+    for(j in colnames(X_int)) {
+      if(j %in% coefs_nm) L[ , j] <- X_int[ , j]
+    }
+
+    tau_hat <- as.numeric(L %*% coef(ols))
+    se_tau  <- sqrt(rowSums((L %*% V) * L))
+
+    # 6) CATE metrics
+    cate_rmse[i]        <- sqrt(mean((tau_hat - true_tau)^2))
+    lo_tau             <- tau_hat - zval * se_tau
+    hi_tau             <- tau_hat + zval * se_tau
+    cate_cov_m[i, ]    <- (lo_tau <= true_tau & true_tau <= hi_tau)
+    cate_len_m[i, ]    <- hi_tau - lo_tau
+  }
+
+  # summarize over sims
+  lasso_results <- rbind(
+    lasso_results,
+    data.frame(
+      dataset         = data_name,
+      ATE_RMSE        = sqrt(mean((ate_hat - true_ATE)^2)),
+      ATE_COVERAGE    = mean(ate_cov),
+      ATE_CI_LENGTH   = mean(ate_len),
+      CATE_RMSE       = mean(cate_rmse),
+      CATE_COVERAGE   = mean(cate_cov_m),
+      CATE_CI_LENGTH  = mean(cate_len_m),
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+print(lasso_results)
+
 ```
 
 
