@@ -100,7 +100,7 @@ set.seed(2020)
 
 # Setup
 n <- 250
-simulations <- 50
+simulations <- 1
 X <- data.frame(x1, x2, x3, x4, x5)
 X_mat <- as.matrix(X)
 
@@ -138,9 +138,7 @@ for (config in dgp_configs) {
 
     # Fit BCF model with the correct propensity scores for this DGP
     fit <- bcf(y = Y, z = Z, x_control = X_mat, x_moderate = X_mat, pihat = pihat,
-              nburn = 1000, nsim = 2000, nthin = 2, 
-              ntree_control = 200, ntree_moderate = 50, 
-              update_interval = 100)
+              nburn = 1000, nsim = 2000)
     
     # Extract posterior mean of treatment effects
     tau_hat <- rowMeans(fit$tau)
