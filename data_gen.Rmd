@@ -1,3 +1,8 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
 Data Generation process for our models
 
 ```{r}
@@ -57,7 +62,7 @@ epsilon <- rnorm(n)
 ```{r}
 #Now lets get our outcomes according to this formula: Y = mu + tau * Z + rnorm(n)
 #Create the 4 datasets
-#Linear and homogenous
+#Linear and homogeneous
 Y_lin_hom <- mu_linear + tau_homogeneous * Z_linear + epsilon
 
 #Linear heterogeneous
@@ -98,15 +103,13 @@ n <- 250
 simulations <- 50
 X <- data.frame(x1, x2, x3, x4, x5)
 X_mat <- as.matrix(X)
-Z <- Z_linear
-pihat <- pi_linear
 
 # Define all 4 DGP combinations
 dgp_configs <- list(
-  list(mu = mu_linear, tau = tau_homogeneous, label = "linear_mu_homog_tau"),
-  list(mu = mu_linear, tau = tau_heterogeneous, label = "linear_mu_heterog_tau"),
-  list(mu = mu_nonlinear, tau = tau_homogeneous, label = "nonlinear_mu_homog_tau"),
-  list(mu = mu_nonlinear, tau = tau_heterogeneous, label = "nonlinear_mu_heterog_tau")
+  list(mu = mu_linear, tau = tau_homogeneous, Z = Z_linear, pihat = pi_linear, label = "linear_mu_homog_tau"),
+  list(mu = mu_linear, tau = tau_heterogeneous, Z = Z_linear, pihat = pi_linear, label = "linear_mu_heterog_tau"),
+  list(mu = mu_nonlinear, tau = tau_homogeneous, Z = Z_nonlinear, pihat = pi_nonlinear, label = "nonlinear_mu_homog_tau"),
+  list(mu = mu_nonlinear, tau = tau_heterogeneous, Z = Z_nonlinear, pihat = pi_nonlinear, label = "nonlinear_mu_heterog_tau")
 )
 
 # Storage for all results
@@ -116,6 +119,8 @@ all_results <- data.frame()
 for (config in dgp_configs) {
   mu <- config$mu
   tau <- config$tau
+  Z <- config$Z
+  pihat <- config$pihat
   label <- config$label
 
   true_ATE <- mean(tau)
@@ -127,16 +132,25 @@ for (config in dgp_configs) {
   )
 
   for (i in 1:simulations) {
+    # Generate new error term for each simulation
     epsilon <- rnorm(n)
     Y <- mu + tau * Z + epsilon
 
-    fit <- bcf(y = Y, z = Z, x_control = X_mat, x_moderate = X_mat, pihat = pihat)
+    # Fit BCF model with the correct propensity scores for this DGP
+    fit <- bcf(y = Y, z = Z, x_control = X_mat, x_moderate = X_mat, pihat = pihat,
+              nburn = 1000, nsim = 2000, nthin = 2, 
+              ntree_control = 200, ntree_moderate = 50, 
+              update_interval = 100)
+    
+    # Extract posterior mean of treatment effects
     tau_hat <- rowMeans(fit$tau)
 
+    # Calculate RMSEs
     rmse_results$ATE_RMSE[i] <- sqrt((mean(tau_hat) - true_ATE)^2)
     rmse_results$CATE_RMSE[i] <- sqrt(mean((tau_hat - true_CATE)^2))
   }
 
+  # Summarize results for this DGP
   summary_rmse <- rmse_results %>%
     summarise(
       ATE_RMSE = mean(ATE_RMSE),
@@ -152,6 +166,7 @@ print(all_results)
 ```
 
 ```{r}
+install.packages('bartCause')
 library(bartCause)
 
 
