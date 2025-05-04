@@ -1,0 +1,204 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+Data Visualizations
+
+
+```{r}
+
+results_all <- data.frame(
+  Method        = rep(c("LASSO", "BART", "BCF"), each = 4),
+  DGP           = rep(c("lin_het", "lin_hom", "nonlin_het", "nonlin_hom"), times = 3),
+  
+  ATE_RMSE      = c(
+    # LASSO
+    0.966, 0.415, 3.27, 2.65,
+    # BART
+    0.330, 0.414, 0.757, 0.777,
+    # BCF
+    0.149, 0.148, 0.159, 0.157
+  ),
+  ATE_Coverage  = c(
+    0.220, 0.88, 0.00, 0.12,
+    0.940, 0.780, 0.180, 0.240,
+    1.00,  0.940, 1.00,  1.00
+  ),
+  ATE_Length    = c(
+    1.48,  1.21,  2.39,  2.56,
+    1.21,  1.12,  1.22,  1.26,
+    0.929, 0.874, 0.906, 0.866
+  ),
+  CATE_RMSE     = c(
+    1.64,  0.370, 4.84, 3.17,
+    1.31,  1.31,  1.69, 1.90,
+    0.786, 0.424, 0.922, 0.402
+  ),
+  CATE_Coverage = c(
+    0.361, 0.882, 0.170, 0.106,
+    0.99,  0.99,  0.95,  0.94,
+    0.952, 0.978, 0.927, 0.984
+  ),
+  CATE_Length   = c(
+    1.68,  1.24,  3.06,  3.05,
+    6.12,  6.12,  5.89,  6.54,
+    2.857, 1.997, 2.937, 1.982
+  ),
+  stringsAsFactors = FALSE
+)
+
+print(results_all)
+
+
+
+```
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# pivot longer
+plot_df <- results_all %>%
+  pivot_longer(
+    cols = c(ATE_RMSE, ATE_Coverage, ATE_Length,
+             CATE_RMSE, CATE_Coverage, CATE_Length),
+    names_to  = "Metric",
+    values_to = "Value"
+  ) %>%
+  # labeling
+  mutate(Metric = recode(Metric,
+    ATE_RMSE      = "ATE RMSE",
+    ATE_Coverage  = "ATE Coverage",
+    ATE_Length    = "ATE Length",
+    CATE_RMSE     = "CATE RMSE",
+    CATE_Coverage = "CATE Coverage",
+    CATE_Length   = "CATE Length"
+  ))
+
+# grouped bar chart with six facets
+ggplot(plot_df, aes(x = DGP, y = Value, fill = Method)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  facet_wrap(~ Metric, ncol = 3, scales = "free_y") +
+  labs(
+    title = "Simulation Metrics by DGP and Method",
+    x     = "Data‐Generating Process",
+    y     = "Metric Value"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position   = "right",
+    axis.text.x       = element_text(angle = 45, hjust = 1),
+    strip.text        = element_text(face = "bold")
+  )
+
+
+ggsave(
+  filename = "simulation_metrics.png",
+  plot     = last_plot(), 
+  width    = 10, 
+  height   = 6,
+  dpi      = 300,
+  bg       = "white"      
+)
+```
+
+
+
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+
+
+bcf_df <- read_csv("bcf_grf_simulation_results.csv") %>%
+  mutate(
+    Prognostic    = factor(dgp_mu,    levels = c("linear","nonlinear"),
+                            labels = c("Linear","Nonlinear")),
+    Heterogeneity = factor(dgp_tau,    levels = c("homogeneous","heterogeneous"),
+                            labels = c("Homogeneous","Heterogeneous"))
+  )
+
+# boxplot and mean‐CI
+ggplot(bcf_df, aes(x = "", y = ate_rmse)) +
+  geom_boxplot(fill = "#619CFF", alpha = 0.7) +
+  geom_jitter(width = 0.1, alpha = 0.3, color = "grey40") +
+  stat_summary(
+    fun = mean, 
+    geom = "point", 
+    color = "red", 
+    size = 2
+  ) +
+  stat_summary(
+    fun.data = mean_cl_normal, 
+    geom     = "errorbar", 
+    width    = 0.2, 
+    color    = "red", 
+    linetype = "dotted"
+  ) +
+  facet_grid(Heterogeneity ~ Prognostic) +
+  labs(
+    x     = NULL,
+    y     = "ATE RMSE",
+    title = "BCF: ATE RMSE across sims\nwith 95% CI for the mean"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.text   = element_text(face = "bold")
+  )
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+
+bcf_df <- read_csv("bcf_grf_simulation_results.csv") %>%
+  mutate(
+    DGP = case_when(
+      dgp_mu == "linear"     & dgp_tau == "homogeneous"   ~ "Linear\nHomogeneous",
+      dgp_mu == "linear"     & dgp_tau == "heterogeneous"  ~ "Linear\nHeterogeneous",
+      dgp_mu == "nonlinear"  & dgp_tau == "homogeneous"   ~ "Nonlinear\nHomogeneous",
+      dgp_mu == "nonlinear"  & dgp_tau == "heterogeneous"  ~ "Nonlinear\nHeterogeneous"
+    )
+  )
+
+df_long <- bcf_df %>%
+  pivot_longer(
+    cols      = c(ate_rmse, cate_rmse),
+    names_to  = "Estimand",
+    values_to = "Value"
+  ) %>%
+  mutate(
+    Estimand = recode(Estimand,
+                      ate_rmse  = "ATE RMSE",
+                      cate_rmse = "CATE RMSE")
+  )
+
+ggplot(df_long, aes(x = "", y = Value)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.6) +
+  facet_grid(
+    Estimand ~ DGP,
+    scales = "free_y",
+    switch = "y"
+  ) +
+  labs(
+    title = "BCF Error Distributions: ATE vs CATE RMSE",
+    x     = NULL,
+    y     = "RMSE"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x    = element_blank(),
+    axis.ticks.x   = element_blank(),
+    strip.text     = element_text(face = "bold"),
+    panel.spacing  = unit(1, "lines")
+  )
+```
+
+
