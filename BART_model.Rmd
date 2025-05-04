@@ -1,0 +1,113 @@
+Bart model
+
+```{r}
+library(dbarts)
+
+set.seed(2020)
+
+# List of datasets
+data_list <- list(
+  lin_hom = data_lin_hom,
+  lin_het = data_lin_het,
+  nonlin_hom = data_nonlin_hom,
+  nonlin_het = data_nonlin_het
+)
+
+# True CATEs
+true_tau_list <- list(
+  lin_hom = tau_homogeneous,
+  lin_het = tau_heterogeneous,
+  nonlin_hom = tau_homogeneous,
+  nonlin_het = tau_heterogeneous
+)
+
+results <- data.frame(
+  dataset = character(),
+  ATE_RMSE = numeric(),
+  ATE_cover = numeric(),
+  ATE_len = numeric(),
+  CATE_RMSE = numeric(),
+  CATE_cover = numeric(),
+  CATE_len = numeric()
+)
+
+for (data_name in names(data_list)) {
+  data <- data_list[[data_name]]
+  true_tau <- true_tau_list[[data_name]]
+  true_ATE <- mean(true_tau)
+  n <- nrow(data)
+  X <- data[, c("x1", "x2", "x3", "x4", "x5")]
+  Z <- data$Z
+  mu <- data$Y - true_tau * Z
+
+  # Storage
+  ate_rmse <- cate_rmse <- numeric(50)
+  ate_cover <- cate_cover <- numeric(50)
+  ate_len <- cate_len <- numeric(50)
+
+  for (i in 1:50) {
+    epsilon <- rnorm(n)
+    Y_sim <- mu + true_tau * Z + epsilon
+
+    X_treated <- X[Z == 1, ]
+    Y_treated <- Y_sim[Z == 1]
+    X_control <- X[Z == 0, ]
+    Y_control <- Y_sim[Z == 0]
+
+    bart_fit_treat <- dbarts::bart(
+      x.train = as.matrix(X_treated),
+      y.train = Y_treated,
+      x.test = as.matrix(X),
+      verbose = FALSE,
+      keeptrees = TRUE
+    )
+
+    bart_fit_control <- dbarts::bart(
+      x.train = as.matrix(X_control),
+      y.train = Y_control,
+      x.test = as.matrix(X),
+      verbose = FALSE,
+      keeptrees = TRUE
+    )
+
+    mu1_samples <- bart_fit_treat$yhat.test
+    mu0_samples <- bart_fit_control$yhat.test
+
+    cate_samples <- mu1_samples - mu0_samples  # dim: [num_samples x n]
+    cate_hat <- colMeans(cate_samples)
+    ate_hat <- mean(cate_hat)
+
+    # ATE RMSE
+    ate_rmse[i] <- sqrt((ate_hat - true_ATE)^2)
+
+    # CATE RMSE
+    cate_rmse[i] <- sqrt(mean((cate_hat - true_tau)^2))
+
+    # ATE CI and coverage
+    ate_samples <- rowMeans(cate_samples)
+    ate_ci <- quantile(ate_samples, probs = c(0.025, 0.975))
+    ate_cover[i] <- true_ATE >= ate_ci[1] && true_ATE <= ate_ci[2]
+    ate_len[i] <- diff(ate_ci)
+
+    # CATE CI and coverage
+    cate_ci_lower <- apply(cate_samples, 2, quantile, probs = 0.025)
+    cate_ci_upper <- apply(cate_samples, 2, quantile, probs = 0.975)
+    cate_cover[i] <- mean(true_tau >= cate_ci_lower & true_tau <= cate_ci_upper)
+    cate_len[i] <- mean(cate_ci_upper - cate_ci_lower)
+  }
+
+  # Save summary results
+  results <- rbind(results, data.frame(
+    dataset = data_name,
+    ATE_RMSE = mean(ate_rmse),
+    ATE_cover = mean(ate_cover),
+    ATE_len = mean(ate_len),
+    CATE_RMSE = mean(cate_rmse),
+    CATE_cover = mean(cate_cover),
+    CATE_len = mean(cate_len)
+  ))
+}
+
+# Print results in a clean format
+knitr::kable(results, digits = 4, caption = "BART simulation results: RMSE, coverage, and interval length for ATE and CATE.")
+```
