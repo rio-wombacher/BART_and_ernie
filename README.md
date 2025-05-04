@@ -8,3 +8,5 @@ BART_model, BCF_model, Lasso_model: Code to generate models and get models. Data
 Visualizations: Code to create graphs from our data and models.
 
 Data_and_models: Creates data and combines code from all of the _model files.
+
+Link to Paper: https://doi.org/10.48550/arXiv.1706.09523
